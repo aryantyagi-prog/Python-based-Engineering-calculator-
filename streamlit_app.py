@@ -253,7 +253,7 @@ with col2:
         st.write("No saved reports yet.")
 
 st.sidebar.markdown("## About")
-st.sidebar.write("Engineering Calculator Suite — web port. Converts the original desktop tool to a browser app so you can deploy and share a live link.")
+st.sidebar.write("An engineering calculator suite originally written in Python, now deployed as a web app using Streamlit. Designed to handle complex calculations with a simple, intuitive interface.")
 
 # Close DB connection on exit (Streamlit keeps process open; this is safe)
 # conn.close()  # don't close here as streamlit re-runs; leaving open is fine for this simple app
