@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 engineering_calculator.py
 Engineering Calculator Suite — Tkinter GUI with embedded Matplotlib.
@@ -22,11 +21,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Use TkAgg backend when running locally (matplotlib chooses it automatically in most installs)
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-# Optional PDF export via Pillow
 try:
     from PIL import Image
     PIL_AVAILABLE = True
@@ -37,7 +34,6 @@ except Exception:
 DATA_FOLDER = os.path.join(os.path.expanduser("~"), "EngineeringCalculatorProjects")
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# Create a simple local SQLite materials DB in a file so it's persistent across runs
 DB_PATH = os.path.join(DATA_FOLDER, "materials.db")
 conn = sqlite3.connect(DB_PATH)
 cur = conn.cursor()
