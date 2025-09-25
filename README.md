@@ -1,46 +1,32 @@
-"""
-engineering_calculator.py
-Engineering Calculator Suite — Tkinter GUI with embedded Matplotlib.
+# streamlit_app.py
+# Streamlit port of the Engineering Calculator Suite (replaces the Tkinter GUI)
+# Features: torque, beam deflection (cantilever/simply-supported), section inertia,
+# small materials DB, plotting, and downloadable PNG/TXT reports.
 
-Features:
-- Torque calculator (force [N] * lever [m]).
-- Beam deflection (Cantilever end load, Simply supported center load).
-- Section inertia for rectangle and circle.
-- Small materials database (queryable).
-- Plotting and saving a project report (PNG + text). Optionally convert PNG to PDF if Pillow installed.
-- Designed to be extended and used as a polished portfolio project.
-
-"""
 import os
+import io
 import math
 import sqlite3
 from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+
+import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from PIL import Image
 
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
+st.set_page_config(page_title="Engineering Calculator Suite", layout="wide")
 
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except Exception:
-    PIL_AVAILABLE = False
-
-# ---------- Utility & DB ----------
-DATA_FOLDER = os.path.join(os.path.expanduser("~"), "EngineeringCalculatorProjects")
+# ----------------- Utility & DB -----------------
+DATA_FOLDER = os.path.join(os.getcwd(), "EngineeringCalculatorProjects")
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-DB_PATH = os.path.join(DATA_FOLDER, "materials.db")
-conn = sqlite3.connect(DB_PATH)
+DB_PATH = os.path.join(os.getcwd(), "materials.db")
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cur = conn.cursor()
 cur.execute("""CREATE TABLE IF NOT EXISTS materials (
     name TEXT PRIMARY KEY, E REAL, density REAL, yield_strength REAL, cost_per_kg REAL
 )""")
-# Seed some materials if not present
 seed_materials = [
     ("Aluminum 6061", 69e9, 2700, 276e6, 2.5),
     ("Steel A36", 200e9, 7850, 250e6, 0.8),
@@ -72,17 +58,14 @@ def query_materials(min_E=None, max_density=None, min_yield=None):
     df = pd.DataFrame(rows, columns=["name", "E (Pa)", "density (kg/m3)", "yield_strength (Pa)", "cost ($/kg)"])
     return df
 
-# ---------- Calculations ----------
+# ----------------- Calculations -----------------
 def I_rect(b, h):
-    """Moment of inertia for rectangle (b width, h height) about centroidal axis."""
     return b * h**3 / 12.0
 
 def I_circle(d):
-    """Moment of inertia for circle diameter d."""
     return math.pi * d**4 / 64.0
 
 def cantilever_deflection_profile(F, L, E, I, num=300):
-    """Cantilever with end load: deflection profile from root x=0 to tip x=L."""
     xs = np.linspace(0, L, num)
     ys = (F * xs**2 * (3*L - xs)) / (6 * E * I)
     return xs, ys
@@ -101,249 +84,176 @@ def simply_supported_center_load_profile(P, L, E, I, num=300):
 def calc_torque(force, lever):
     return force * lever
 
-# ---------- Save / Report ----------
 def safe_filename(s):
     return "".join(c for c in s if (c.isalnum() or c in (" ", "_", "-"))).rstrip().replace(" ", "_")
 
-def save_report(project_name, inputs_summary, fig):
-    """Save PNG and TXT report. Optionally convert to PDF if Pillow installed."""
+def fig_to_png_bytes(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, bbox_inches='tight', dpi=150)
+    buf.seek(0)
+    return buf
+
+def save_txt_summary(project_name, inputs_summary):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = f"{safe_filename(project_name)}_{timestamp}"
-    png_path = os.path.join(DATA_FOLDER, base + ".png")
     txt_path = os.path.join(DATA_FOLDER, base + ".txt")
-    fig.savefig(png_path, bbox_inches='tight', dpi=150)
     with open(txt_path, "w") as f:
         f.write(f"Project: {project_name}\nSaved: {datetime.now().isoformat()}\n\nInputs & summary:\n")
         for k, v in inputs_summary.items():
             f.write(f"{k}: {v}\n")
-    pdf_path = None
-    if PIL_AVAILABLE:
-        try:
-            img = Image.open(png_path)
-            rgb = img.convert('RGB')
-            pdf_path = os.path.join(DATA_FOLDER, base + ".pdf")
-            rgb.save(pdf_path)
-        except Exception as e:
-            print("PDF export failed:", e)
-            pdf_path = None
-    return {"png": png_path, "txt": txt_path, "pdf": pdf_path}
+    return txt_path
 
-# ---------- GUI ----------
-class EngineeringApp(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("Engineering Calculator Suite")
-        self.geometry("1100x720")
-        self.create_widgets()
+# ----------------- UI -----------------
+st.title("Engineering Calculator Suite (Web)")
 
-    def create_widgets(self):
-        # Left frame: controls
-        left = ttk.Frame(self)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+col1, col2 = st.columns([1, 1.4])
 
-        ttk.Label(left, text="Engineering Calculator Suite", font=("Helvetica", 16, "bold")).pack(pady=(0,10))
+with col1:
+    st.header("Inputs")
+    st.subheader("Torque Calculator")
+    force = st.number_input("Force (N)", value=150.0, format="%.6f")
+    lever = st.number_input("Lever arm (m)", value=0.35, format="%.6f")
+    if st.button("Compute Torque"):
+        torque = calc_torque(force, lever)
+        st.success(f"Torque = {torque:.6f} N·m")
+        fig = plt.figure(figsize=(5,3))
+        ax = fig.add_subplot(111)
+        ax.bar(["Torque (N·m)"], [torque])
+        ax.set_ylabel("N·m")
+        ax.set_title(f"Torque = {torque:.6f} N·m")
+        st.pyplot(fig)
+        # prepare downloads
+        png_buf = fig_to_png_bytes(fig)
+        txt_path = save_txt_summary("torque_project", {"force_N": force, "lever_m": lever, "torque_Nm": torque})
+        st.download_button("Download PNG", data=png_buf, file_name="torque_plot.png", mime="image/png")
+        with open(txt_path, "rb") as f:
+            txt_bytes = f.read()
+        st.download_button("Download TXT summary", data=txt_bytes, file_name=os.path.basename(txt_path), mime="text/plain")
+        plt.close(fig)
 
-        # Torque frame
-        torque_frame = ttk.LabelFrame(left, text="Torque Calculator")
-        torque_frame.pack(fill=tk.X, pady=6)
-        ttk.Label(torque_frame, text="Force (N):").grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
-        self.force_var = tk.DoubleVar(value=150.0)
-        ttk.Entry(torque_frame, textvariable=self.force_var, width=12).grid(row=0, column=1, padx=4, pady=2)
-        ttk.Label(torque_frame, text="Lever arm (m):").grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
-        self.lever_var = tk.DoubleVar(value=0.35)
-        ttk.Entry(torque_frame, textvariable=self.lever_var, width=12).grid(row=1, column=1, padx=4, pady=2)
-        ttk.Button(torque_frame, text="Compute Torque", command=self.on_compute_torque).grid(row=2, column=0, columnspan=2, pady=6)
+    st.markdown("---")
+    st.subheader("Beam Deflection")
+    L = st.number_input("Beam length L (m)", value=1.0, format="%.6f")
+    load = st.number_input("Load (N)", value=200.0, format="%.6f")
+    section_type = st.radio("Section type", ("rect", "circle"))
+    if section_type == "rect":
+        s1 = st.number_input("b (width) in m", value=0.02, format="%.6f")
+        s2 = st.number_input("h (height) in m", value=0.04, format="%.6f")
+    else:
+        s1 = st.number_input("d (diameter) in m", value=0.02, format="%.6f")
+        s2 = 0.0
 
-        # Beam frame
-        beam_frame = ttk.LabelFrame(left, text="Beam Deflection")
-        beam_frame.pack(fill=tk.X, pady=6)
-        ttk.Label(beam_frame, text="Beam Length L (m):").grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
-        self.length_var = tk.DoubleVar(value=1.0)
-        ttk.Entry(beam_frame, textvariable=self.length_var, width=12).grid(row=0, column=1, padx=4, pady=2)
+    col_bs1, col_bs2 = st.columns(2)
+    with col_bs1:
+        if st.button("Plot Cantilever"):
+            if section_type == "rect":
+                I = I_rect(s1, s2)
+            else:
+                I = I_circle(s1)
+            cur.execute("SELECT E FROM materials WHERE name = ?", ("Aluminum 6061",))
+            row = cur.fetchone()
+            E = row[0] if row else 69e9
+            xs, ys = cantilever_deflection_profile(load, L, E, I)
+            max_defl = float(max(ys))
+            fig = plt.figure(figsize=(7,3))
+            ax = fig.add_subplot(111)
+            ax.plot(xs, ys, linewidth=2)
+            ax.set_xlabel("x (m)")
+            ax.set_ylabel("deflection (m)")
+            ax.set_title(f"Cantilever deflection (max = {max_defl:.6e} m)")
+            st.pyplot(fig)
+            inputs = {"type":"cantilever","F_N": load, "L_m": L, "I_m4": I, "E_Pa": E, "max_deflection_m": max_defl}
+            png_buf = fig_to_png_bytes(fig)
+            txt_path = save_txt_summary("cantilever_project", inputs)
+            st.download_button("Download Cantilever PNG", data=png_buf, file_name="cantilever.png", mime="image/png")
+            with open(txt_path, "rb") as f: txt_bytes = f.read()
+            st.download_button("Download Cantilever TXT", data=txt_bytes, file_name=os.path.basename(txt_path), mime="text/plain")
+            plt.close(fig)
 
-        ttk.Label(beam_frame, text="Load (N):").grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
-        self.load_var = tk.DoubleVar(value=200.0)
-        ttk.Entry(beam_frame, textvariable=self.load_var, width=12).grid(row=1, column=1, padx=4, pady=2)
+    with col_bs2:
+        if st.button("Plot Simply Supported"):
+            if section_type == "rect":
+                I = I_rect(s1, s2)
+            else:
+                I = I_circle(s1)
+            cur.execute("SELECT E FROM materials WHERE name = ?", ("Aluminum 6061",))
+            row = cur.fetchone()
+            E = row[0] if row else 69e9
+            xs, ys = simply_supported_center_load_profile(load, L, E, I)
+            max_defl = float(max(ys))
+            fig = plt.figure(figsize=(7,3))
+            ax = fig.add_subplot(111)
+            ax.plot(xs, ys, linewidth=2)
+            ax.set_xlabel("x (m)")
+            ax.set_ylabel("deflection (m)")
+            ax.set_title(f"Simply supported center load (max = {max_defl:.6e} m)")
+            st.pyplot(fig)
+            inputs = {"type":"simply_supported","P_N": load, "L_m": L, "I_m4": I, "E_Pa": E, "max_deflection_m": max_defl}
+            png_buf = fig_to_png_bytes(fig)
+            txt_path = save_txt_summary("simply_supported_project", inputs)
+            st.download_button("Download SimplySupported PNG", data=png_buf, file_name="simply_supported.png", mime="image/png")
+            with open(txt_path, "rb") as f: txt_bytes = f.read()
+            st.download_button("Download SimplySupported TXT", data=txt_bytes, file_name=os.path.basename(txt_path), mime="text/plain")
+            plt.close(fig)
 
-        ttk.Label(beam_frame, text="Section type:").grid(row=2, column=0, sticky=tk.W, padx=4, pady=2)
-        self.section_type = tk.StringVar(value="rect")
-        ttk.Radiobutton(beam_frame, text="Rect (b,h)", variable=self.section_type, value="rect").grid(row=2, column=1, sticky=tk.W, padx=4)
-        ttk.Radiobutton(beam_frame, text="Circle (d)", variable=self.section_type, value="circle").grid(row=3, column=1, sticky=tk.W, padx=4)
+    st.markdown("---")
+    st.subheader("Materials DB")
+    minE = st.number_input("Min E (GPa) - leave 0 for no filter", value=0.0, format="%.6f")
+    maxD = st.number_input("Max density (kg/m3)", value=10000.0, format="%.6f")
+    if st.button("Query Materials"):
+        df = query_materials(min_E=(minE*1e9 if minE>0 else None), max_density=(maxD if maxD>0 else None), min_yield=None)
+        st.dataframe(df)
 
-        ttk.Label(beam_frame, text="b or d (m):").grid(row=4, column=0, sticky=tk.W, padx=4, pady=2)
-        self.s1_var = tk.DoubleVar(value=0.02)
-        ttk.Entry(beam_frame, textvariable=self.s1_var, width=12).grid(row=4, column=1, padx=4, pady=2)
+with col2:
+    st.header("Materials & Tools")
+    st.markdown("You can add materials directly below (name, E (Pa), density, yield_strength (Pa), cost $/kg).")
+    with st.form("add_material"):
+        nm = st.text_input("Material name")
+        E_v = st.number_input("E (Pa)", value=69e9, format="%.6e")
+        dens = st.number_input("Density (kg/m3)", value=2700.0)
+        yld = st.number_input("Yield strength (Pa)", value=276e6, format="%.6e")
+        cost = st.number_input("Cost ($/kg)", value=2.5)
+        if st.form_submit_button("Add / Update Material"):
+            try:
+                cur.execute("INSERT OR REPLACE INTO materials (name, E, density, yield_strength, cost_per_kg) VALUES (?, ?, ?, ?, ?)",
+                            (nm, float(E_v), float(dens), float(yld), float(cost)))
+                conn.commit()
+                st.success(f"Saved material: {nm}")
+            except Exception as e:
+                st.error("Failed to save: " + str(e))
 
-        ttk.Label(beam_frame, text="h (m) if rect:").grid(row=5, column=0, sticky=tk.W, padx=4, pady=2)
-        self.s2_var = tk.DoubleVar(value=0.04)
-        ttk.Entry(beam_frame, textvariable=self.s2_var, width=12).grid(row=5, column=1, padx=4, pady=2)
+    st.markdown("### Current materials table")
+    try:
+        cur.execute("SELECT name, E, density, yield_strength, cost_per_kg FROM materials")
+        rows = cur.fetchall()
+        df_all = pd.DataFrame(rows, columns=["name", "E (Pa)", "density (kg/m3)", "yield_strength (Pa)", "cost ($/kg)"])
+        st.dataframe(df_all)
+    except Exception as e:
+        st.error("DB read error: " + str(e))
 
-        ttk.Button(beam_frame, text="Plot Cantilever", command=self.on_plot_cantilever).grid(row=6, column=0, pady=6)
-        ttk.Button(beam_frame, text="Plot Simply Supported", command=self.on_plot_simply_supported).grid(row=6, column=1, pady=6)
+    st.markdown("---")
+    st.header("Project Reports")
+    st.markdown("Saved reports are stored in the `EngineeringCalculatorProjects` folder in the app working directory.")
+    reports = sorted([f for f in os.listdir(DATA_FOLDER) if f.endswith(".txt") or f.endswith(".png")], reverse=True)
+    if reports:
+        sel = st.selectbox("Pick a saved file to view/download", reports)
+        if sel:
+            path = os.path.join(DATA_FOLDER, sel)
+            if sel.endswith(".png"):
+                st.image(path, use_column_width=True)
+                with open(path, "rb") as f:
+                    st.download_button("Download PNG", f, file_name=sel, mime="image/png")
+            else:
+                with open(path, "r") as f:
+                    txt = f.read()
+                st.code(txt)
+                with open(path, "rb") as f:
+                    st.download_button("Download TXT", f, file_name=sel, mime="text/plain")
+    else:
+        st.write("No saved reports yet.")
 
-        # Materials query frame
-        mat_frame = ttk.LabelFrame(left, text="Materials DB Query")
-        mat_frame.pack(fill=tk.X, pady=6)
-        ttk.Label(mat_frame, text="Min E (GPa):").grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
-        self.minE_var = tk.DoubleVar(value=0.0)
-        ttk.Entry(mat_frame, textvariable=self.minE_var, width=12).grid(row=0, column=1, padx=4, pady=2)
-        ttk.Label(mat_frame, text="Max density (kg/m3):").grid(row=1, column=0, sticky=tk.W, padx=4, pady=2)
-        self.maxD_var = tk.DoubleVar(value=10000.0)
-        ttk.Entry(mat_frame, textvariable=self.maxD_var, width=12).grid(row=1, column=1, padx=4, pady=2)
-        ttk.Button(mat_frame, text="Query Materials", command=self.on_query_materials).grid(row=2, column=0, columnspan=2, pady=6)
+st.sidebar.markdown("## About")
+st.sidebar.write("Engineering Calculator Suite — web port. Converts the original desktop tool to a browser app so you can deploy and share a live link.")
 
-        # Save/export
-        export_frame = ttk.LabelFrame(left, text="Save / Export")
-        export_frame.pack(fill=tk.X, pady=6)
-        ttk.Label(export_frame, text="Project name:").grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
-        self.project_name_var = tk.StringVar(value="my_project")
-        ttk.Entry(export_frame, textvariable=self.project_name_var, width=20).grid(row=0, column=1, padx=4, pady=2)
-        ttk.Button(export_frame, text="Save current figure & summary", command=self.on_save_report).grid(row=1, column=0, columnspan=2, pady=6)
-        self.last_report = None
-
-        # Right frame: plotting area
-        right = ttk.Frame(self)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-        self.fig = Figure(figsize=(7,6), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_title("Plots will appear here")
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        # Bottom: status / materials table
-        bottom = ttk.Frame(self)
-        bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=6)
-        self.status_label = ttk.Label(bottom, text=f"Saved projects folder: {DATA_FOLDER}")
-        self.status_label.pack(side=tk.LEFT)
-
-    # ---------- event handlers ----------
-    def on_compute_torque(self):
-        try:
-            F = float(self.force_var.get())
-            l = float(self.lever_var.get())
-        except Exception as e:
-            messagebox.showerror("Invalid input", "Check Force and Lever inputs.")
-            return
-        torque = calc_torque(F, l)
-        self.ax.clear()
-        self.ax.bar(["Torque (N·m)"], [torque])
-        self.ax.set_ylabel("N·m")
-        self.ax.set_title(f"Torque = {torque:.4f} N·m")
-        self.canvas.draw()
-        self.current_summary = {"type": "torque", "force_N": F, "lever_m": l, "torque_Nm": torque}
-        self.status_label.config(text=f"Computed torque: {torque:.4f} N·m")
-
-    def on_plot_cantilever(self):
-        try:
-            L = float(self.length_var.get())
-            F = float(self.load_var.get())
-            st = self.section_type.get()
-            s1 = float(self.s1_var.get())
-            s2 = float(self.s2_var.get())
-        except Exception:
-            messagebox.showerror("Invalid input", "Check beam inputs.")
-            return
-        if st == "rect":
-            I = I_rect(s1, s2)
-        else:
-            I = I_circle(s1)
-        # default material: Aluminum 6061
-        cur.execute("SELECT E FROM materials WHERE name = ?", ("Aluminum 6061",))
-        row = cur.fetchone()
-        E = row[0] if row else 69e9
-        xs, ys = cantilever_deflection_profile(F, L, E, I)
-        max_defl = max(ys)
-        self.ax.clear()
-        self.ax.plot(xs, ys, linewidth=2)
-        self.ax.set_xlabel("x (m)")
-        self.ax.set_ylabel("deflection (m)")
-        self.ax.set_title(f"Cantilever deflection (max = {max_defl:.6e} m)")
-        self.canvas.draw()
-        self.current_summary = {
-            "type": "cantilever",
-            "F_N": F,
-            "L_m": L,
-            "section_I_m4": I,
-            "E_Pa": E,
-            "max_deflection_m": max_defl
-        }
-        self.status_label.config(text=f"Cantilever max deflection: {max_defl:.6e} m")
-
-    def on_plot_simply_supported(self):
-        try:
-            L = float(self.length_var.get())
-            P = float(self.load_var.get())
-            st = self.section_type.get()
-            s1 = float(self.s1_var.get())
-            s2 = float(self.s2_var.get())
-        except Exception:
-            messagebox.showerror("Invalid input", "Check beam inputs.")
-            return
-        if st == "rect":
-            I = I_rect(s1, s2)
-        else:
-            I = I_circle(s1)
-        cur.execute("SELECT E FROM materials WHERE name = ?", ("Aluminum 6061",))
-        row = cur.fetchone()
-        E = row[0] if row else 69e9
-        xs, ys = simply_supported_center_load_profile(P, L, E, I)
-        max_defl = max(ys)
-        self.ax.clear()
-        self.ax.plot(xs, ys, linewidth=2)
-        self.ax.set_xlabel("x (m)")
-        self.ax.set_ylabel("deflection (m)")
-        self.ax.set_title(f"Simply supported center load (max = {max_defl:.6e} m)")
-        self.canvas.draw()
-        self.current_summary = {
-            "type": "simply_supported_center",
-            "P_N": P,
-            "L_m": L,
-            "section_I_m4": I,
-            "E_Pa": E,
-            "max_deflection_m": max_defl
-        }
-        self.status_label.config(text=f"Simply supported max deflection: {max_defl:.6e} m")
-
-    def on_query_materials(self):
-        try:
-            minE_GPa = float(self.minE_var.get())
-            maxD = float(self.maxD_var.get())
-        except Exception:
-            messagebox.showerror("Invalid input", "Check material query inputs.")
-            return
-        df = query_materials(min_E=minE_GPa*1e9 if minE_GPa>0 else None,
-                             max_density=maxD if maxD>0 else None,
-                             min_yield=None)
-        # Show top results in a popup window with a small table
-        popup = tk.Toplevel(self)
-        popup.title("Materials Query Results")
-        text = tk.Text(popup, wrap=tk.NONE, width=80, height=10)
-        text.insert("1.0", df.to_string(index=False))
-        text.configure(state="disabled")
-        text.pack(fill=tk.BOTH, expand=True)
-        ttk.Button(popup, text="Close", command=popup.destroy).pack(pady=4)
-
-    def on_save_report(self):
-        if not hasattr(self, "current_summary"):
-            messagebox.showwarning("Nothing to save", "Compute or plot something first.")
-            return
-        proj_name = self.project_name_var.get().strip()
-        if proj_name == "":
-            proj_name = "unnamed_project"
-        # Save current figure and summary
-        saved = save_report(proj_name, self.current_summary, self.fig)
-        msg = f"Saved PNG: {saved['png']}\nSaved TXT: {saved['txt']}"
-        if saved.get("pdf"):
-            msg += f"\nSaved PDF: {saved['pdf']}"
-        messagebox.showinfo("Saved report", msg)
-        self.last_report = saved
-        self.status_label.config(text=f"Saved report: {os.path.basename(saved['png'])}")
-
-# Run app
-def main():
-    app = EngineeringApp()
-    app.mainloop()
-
-if __name__ == "__main__":
-    main()
+# Close DB connection on exit (Streamlit keeps process open; this is safe)
+# conn.close()  # don't close here as streamlit re-runs; leaving open is fine for this simple app
